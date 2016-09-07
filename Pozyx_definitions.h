@@ -20,6 +20,12 @@
 #ifndef POZYX_DEFINITIONS_h
 #define POZYX_DEFINITIONS_h
 
+#include <sys/time.h>
+#include <unistd.h>
+#include <math.h>
+#include <string.h>
+
+
 #define _POZYX_LIB_VERSION          1
 #define _POZYX_FEET_PER_METER       3.2808399
 #define _POZYX_INCH_PER_METER       39.3700787
@@ -287,4 +293,13 @@
 #define PIN_ACTIVE_LOW                    0
 #define PIN_ACTIVE_HIGH                   1
 
+#define F(X)	X
+#define delay(x)		usleep(x*1000)
+#define BUFFER_LENGTH	256 /* 一次传送的字节数 */
+// BUFFER_LENGTH is defined in wire.h, it limits the maximum amount of bytes that can be transmitted/received with i2c in one go
+// because of this, we may have to split up the i2c reads in smaller chunks
+
+#define  print_here() {\
+							printf("get here ,file %s, line %d \n", __FILE__, __LINE__);\
+						}
 #endif

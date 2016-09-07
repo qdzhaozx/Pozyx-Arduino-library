@@ -6,7 +6,14 @@
 */
 
 #include "Pozyx.h"
-#include <Wire.h>
+#include <stdio.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <math.h>
+#include <string.h>
+
+#include "wire.h"
+#include "serial.h"
 
 extern "C" {
   #include "Pozyx_definitions.h"
@@ -16,7 +23,7 @@ int PozyxClass::_interrupt;
 int PozyxClass::_mode;
 
 int PozyxClass::_hw_version;       // pozyx harware version 
-int PozyxClass::_fw_version;       // pozyx firmware version. (By updating the firmware on the pozyx device, this value can change);
+int PozyxClass::_sw_version;       // pozyx software (firmware) version. (By updating the firmware on the pozyx device, this value can change);
 
 /**
  * The interrupt handler for the pozyx device: keeping it uber short!
@@ -26,13 +33,27 @@ void PozyxClass::IRQ()
   _interrupt = 1;  
 }
 
+unsigned long int get_ms_time()
+{
+	int sec1 = 0,usec1 =0;
+	struct timeval tv;
+	unsigned long int val1;
+
+	gettimeofday(&tv, NULL);
+	sec1 = tv.tv_sec;
+	usec1 = tv.tv_usec;
+	val1 = sec1*1000;
+	val1 = val1 + usec1/1000;
+	
+	return val1;
+}
 boolean PozyxClass::waitForFlag(uint8_t interrupt_flag, int timeout_ms, uint8_t *interrupt)
 {
-  long timer = millis();
+  long timer = get_ms_time();
   int status;
   
   // stay in this loop until the event interrupt flag is set or until the the timer runs out
-  while(millis()-timer < timeout_ms)
+  while(get_ms_time()-timer < (unsigned long)timeout_ms)
   {
     // in polling mode, we insert a small delay such that we don't swamp the i2c bus
     if( _mode == MODE_POLLING ){
@@ -103,19 +124,15 @@ int PozyxClass::begin(boolean print_result, int mode, int interrupts, int interr
     return POZYX_FAILURE;
   }  
   whoami = regs[0];
-  _fw_version = regs[1];
+  _sw_version = regs[1];
   _hw_version = regs[2]; 
 
   if(print_result){
     Serial.print("WhoAmI: 0x");
-    Serial.println(whoami, HEX);
-    Serial.print("FW ver.: v");
-    Serial.print((_fw_version&0xF0)>>4);
-    Serial.print(".");
-    Serial.print((_fw_version&0x0F));
-    if(_fw_version < 0x10)
-      Serial.print(" (please upgrade)");
-    Serial.print("\nHW ver.: ");
+    Serial.println((int)whoami, 0);
+    Serial.print("SW ver.: ");
+    Serial.println(_sw_version);
+    Serial.print("HW ver.: ");
     Serial.println(_hw_version);  
   }
   // verify if the whoami is correct
@@ -130,8 +147,8 @@ int PozyxClass::begin(boolean print_result, int mode, int interrupts, int interr
   } 
 
   if(print_result){
-    Serial.print("selftest: 0b");
-    Serial.println(selftest, BIN);
+    Serial.print("selftest: 0x");
+    Serial.println((int)selftest, 0);
   }
 
   if((_hw_version & POZYX_TYPE) == POZYX_TAG)
@@ -154,14 +171,14 @@ int PozyxClass::begin(boolean print_result, int mode, int interrupts, int interr
     // put your main code here, to run repeatedly:
 #if defined(__SAMD21G18A__) || defined(__ATSAMD21G18A__)
     // Arduino Tian
-    int tian_interrupt_pin = interrupt_pin;
-    attachInterrupt(interrupt_pin+2, IRQ, RISING);
+	int tian_interrupt_pin = interrupt_pin;
+	attachInterrupt(interrupt_pin+2, IRQ, RISING);
 #elif defined(__AVR_ATmega328P__) || defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
     // Arduino UNO, Mega
     attachInterrupt(interrupt_pin, IRQ, RISING);
 #else
-    Serial.println("This is not a board supported by Pozyx, interrupts may not work");
-    attachInterrupt(interrupt_pin, IRQ, RISING);
+	Serial.println("This is not a board supported by Pozyx, interrupts may not work");
+	//!attachInterrupt(interrupt_pin, IRQ, RISING);
 #endif
 
     // use interrupt as provided and initiate the interrupt mask
@@ -171,10 +188,24 @@ int PozyxClass::begin(boolean print_result, int mode, int interrupts, int interr
     if (regWrite(POZYX_INT_MASK, &int_mask, 1) == POZYX_FAILURE){
       return POZYX_FAILURE;
     }
-  }   
+  }
   
   // all done
   delay(POZYX_DELAY_LOCAL_WRITE);
+	regs[0] = regs[1] = regs[2] = 0x00;
+	printf("get anchor informations: \n");
+	if((status=remoteRegRead(0x605c, POZYX_WHO_AM_I, regs, 3)) == POZYX_FAILURE)
+	{
+		printf("get anchor failed!\n");
+		abort();
+	}
+	printf("get remote status %d\n", status);
+	Serial.print("who am i: ");
+	Serial.println(regs[0], 0);
+	Serial.print("firmware version: ");
+	Serial.println(regs[1], 0);
+	Serial.print("hardware version: ");
+	Serial.println(regs[2], 0);
   return status;
 }
 
@@ -189,11 +220,15 @@ int PozyxClass::regRead(uint8_t reg_address, uint8_t *pData, int size)
   if(!IS_REG_READABLE(reg_address))
     return POZYX_FAILURE;
   
-  int n_runs = ceil((float)size / BUFFER_LENGTH);
-  int i;
+  //int n_runs = ceil((float)size / BUFFER_LENGTH);
+  //int i;
   int status = 1;
+  
+  Wire.setPozyxAddr(POZYX_I2C_ADDRESS);
+#if 1
+  status &= i2cWriteRead(&reg_address, 1, pData, size);
+#else
   uint8_t reg;
-    
   for(i=0; i<n_runs; i++)
   {
     int offset = i*BUFFER_LENGTH;
@@ -205,7 +240,8 @@ int PozyxClass::regRead(uint8_t reg_address, uint8_t *pData, int size)
       status &= i2cWriteRead(&reg, 1, pData+offset, size-offset);
     }    
   }
-  
+#endif
+    
   return status;
 }
 
@@ -220,10 +256,14 @@ int PozyxClass::regWrite(uint8_t reg_address, const uint8_t *pData, int size)
   if(!IS_REG_WRITABLE(reg_address))
     return POZYX_FAILURE;
   
-  int n_runs = ceil((float)size / BUFFER_LENGTH);
-  int i;
+  //int n_runs = ceil((float)size / BUFFER_LENGTH);
+  //int i;
   int status = 1;
     
+  Wire.setPozyxAddr(POZYX_I2C_ADDRESS);
+#if 1
+  status &= i2cWriteWrite(reg_address, pData, size);
+#else
   for(i=0; i<n_runs; i++)
   {
     int offset = i*BUFFER_LENGTH;
@@ -233,7 +273,8 @@ int PozyxClass::regWrite(uint8_t reg_address, const uint8_t *pData, int size)
       status &= i2cWriteWrite(reg_address+offset, pData+offset, size-offset);
     }    
   }
-  
+#endif
+//	printf("reg write status %d \n", status);
   return status;
 }
 
@@ -255,15 +296,24 @@ int PozyxClass::regFunction(uint8_t reg_address, uint8_t *params, int param_size
   write_data[0] = reg_address;
   memcpy(write_data+1, params, param_size);
   uint8_t read_data[size+1];
-  
+  Wire.setPozyxAddr(POZYX_I2C_ADDRESS);
+
+#if 0
+  printf("write to pozyx ");
+  for (int i=0; i<(param_size+1);i++) printf("%02x ", write_data[i]);
+  printf("\n");
+#endif
   // first write some data with i2c and then read some data
   status = i2cWriteRead(write_data, param_size + 1, read_data, size+1);
   if(status == POZYX_FAILURE)
-    return status;    
+  {
+	  print_here()
+	  return status;
+  }
   
   memcpy(pData, read_data+1, size);
-
   
+  //print_here()
   // the first byte that a function returns is always it's success indicator, so we simply pass this through
   return read_data[0];
 }
@@ -562,13 +612,22 @@ int PozyxClass::sendData(uint16_t destination, uint8_t *pData, int size)
 /**
   * Writes a number of bytes to the specified pozyx register address using I2C
   */
-int PozyxClass::i2cWriteWrite(const uint8_t reg_address, const uint8_t *pData, int size)
+int PozyxClass::i2cWriteWrite(const uint8_t reg_address, const uint8_t *pData, int len)
 {
+#if 1
+	int n;
+
+	n = Wire.i2c_writewrite(POZYX_I2C_ADDRESS, &reg_address, 1, pData, len);
+
+	if (n<0)
+		return (POZYX_FAILURE);
+	return (POZYX_SUCCESS);  // return : no error
+#else
   int n, error;
 
   Wire.beginTransmission(POZYX_I2C_ADDRESS);
   // write the starting register address
-  n = Wire.write(reg_address);        
+  n = Wire.i2c_write(reg_address);        
   if (n != 1)
     return (POZYX_FAILURE);
     
@@ -577,7 +636,7 @@ int PozyxClass::i2cWriteWrite(const uint8_t reg_address, const uint8_t *pData, i
     return (POZYX_FAILURE);  
 
   Wire.beginTransmission(POZYX_I2C_ADDRESS);
-  n = Wire.write(pData, size);  // write data bytes
+  n = Wire.i2c_write(pData, size);  // write data bytes
   if (n != size)
     return (POZYX_FAILURE);
 
@@ -586,6 +645,7 @@ int PozyxClass::i2cWriteWrite(const uint8_t reg_address, const uint8_t *pData, i
     return (POZYX_FAILURE);
 
   return (POZYX_SUCCESS);         // return : no error
+#endif
 }
 
 /**
@@ -593,11 +653,31 @@ int PozyxClass::i2cWriteWrite(const uint8_t reg_address, const uint8_t *pData, i
   */
 int PozyxClass::i2cWriteRead(uint8_t* write_data, int write_len, uint8_t* read_data, int read_len)
 {
+#if 1
+	int n;
+
+	assert(write_len>0);
+
+	n = Wire.i2c_writeread(POZYX_I2C_ADDRESS, write_data, write_len, read_data, read_len);
+
+/* 
+	int i;
+	printf("get[%d]: ",n);
+	for (i=0;i<read_len;i++)
+	{
+		printf("%02x ", read_data[i]);
+	}
+	printf("\n");
+*/
+	if (n<0)
+		return (POZYX_FAILURE);
+	return (POZYX_SUCCESS);  // return : no error
+#else
   int i, n;
 
   Wire.beginTransmission(POZYX_I2C_ADDRESS);
   for(i=0; i<write_len; i++){
-    n = Wire.write(*(write_data+i));  // write parameter bytes
+    n = Wire.i2c_write(*(write_data+i));  // write parameter bytes,reg addr.
   }
 
   if (n != 1)
@@ -608,16 +688,16 @@ int PozyxClass::i2cWriteRead(uint8_t* write_data, int write_len, uint8_t* read_d
   if (n != 0)
     return (POZYX_FAILURE);
 
-  // Third parameter is true: relase I2C-bus after data is read.
+  // Third parameter is true: release I2C-bus after data is read.
   Wire.requestFrom(POZYX_I2C_ADDRESS, read_len, true);
   i = 0;
-  
+
   while(Wire.available())
   {
     if(i<read_len)
-      read_data[i++]=Wire.read();
+      read_data[i++]=Wire.i2c_read();
     else  
-      Wire.read();
+      Wire.i2c_read();
   }
 
   if ( i != read_len){
@@ -625,6 +705,7 @@ int PozyxClass::i2cWriteRead(uint8_t* write_data, int write_len, uint8_t* read_d
   }
 
   return (POZYX_SUCCESS);  // return : no error
+#endif
 }
 
 PozyxClass Pozyx;
