@@ -1,4 +1,11 @@
 # Pozyx-Arduino-library
+##Linux codes declarations
+All codes be migrated to linux,and test ok!
+And all devices are updated to ver1.0 firmware.
+
+
+------------------------------------------------------------------
+##Previous contents
 The Arduino library for use with the pozyx shield.
 
 The library requires **firmware version 1.0** installed on the Pozyx devices.
